@@ -42,6 +42,7 @@ import java.security.Security;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * @author Brian Roach <roach at basho dot com>
@@ -57,6 +58,13 @@ public class RiakNode implements RiakResponseListener
     }
 
     private final Logger logger = LoggerFactory.getLogger(RiakNode.class);
+
+    private final AtomicLong requestedConnection = new AtomicLong(0);
+    private final LongAdder gettingConnectionTime = new LongAdder();
+    private final AtomicLong givenConnection = new AtomicLong(0);
+    private final AtomicLong createdConnection = new AtomicLong(0);
+    private final AtomicLong returnedConnection = new AtomicLong(0);
+
 
     private final LinkedBlockingDeque<ChannelWithIdleTime> available = new LinkedBlockingDeque<>();
     private final ConcurrentLinkedQueue<ChannelWithIdleTime> recentlyClosed = new ConcurrentLinkedQueue<>();
@@ -201,6 +209,24 @@ public class RiakNode implements RiakResponseListener
         checkNetworkAddressCacheSettings();
 
         this.state = State.CREATED;
+        new Thread(new Runnable() {
+            final Logger logger = LoggerFactory.getLogger("timings");
+            @Override
+            public void run() {
+                while (true) {
+                    final long r = requestedConnection.getAndSet(0);
+                    final long totalTime = gettingConnectionTime.sumThenReset();
+                    logger.info("Pool statistic: requested = {}, given = {}, createdOnTheFly = {}, returned = {}, total time to get = {}ms , avg time to get = {}ms ", r, givenConnection.getAndSet(0),
+                        createdConnection.getAndSet(0), returnedConnection.getAndSet(0), totalTime, r == 0 ? 0 : totalTime / r );
+                    try {
+                        Thread.sleep(10000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                        throw new RuntimeException(e);
+                    }
+                }
+            }
+        }, "Riak client statistics").start();
     }
 
     private void stateCheck(State... allowedStates)
@@ -585,13 +611,15 @@ public class RiakNode implements RiakResponseListener
             inProgressMap.put(channel, operation);
             ChannelFuture writeFuture = channel.writeAndFlush(operation);
             writeFuture.addListener(writeListener);
-            logger.debug("Operation {} being executed on RiakNode {}:{}",
+            if(logger.isDebugEnabled())
+                logger.debug("Operation {} being executed on RiakNode {}:{}",
                          System.identityHashCode(operation), remoteAddress, port);
             return true;
         }
         else
         {
-            logger.debug("Operation {} not being executed Riaknode {}:{}; no connections available",
+            if(logger.isDebugEnabled())
+                logger.debug("Operation {} not being executed Riaknode {}:{}; no connections available",
                          System.identityHashCode(operation), remoteAddress, port);
             return false;
         }
@@ -617,6 +645,8 @@ public class RiakNode implements RiakResponseListener
      */
     private Channel getConnection()
     {
+        requestedConnection.incrementAndGet();
+        final long s = System.currentTimeMillis();
         stateCheck(State.RUNNING, State.HEALTH_CHECKING);
         boolean acquired = false;
         if (blockOnMaxConnections)
@@ -667,6 +697,7 @@ public class RiakNode implements RiakResponseListener
                 logger.error("Unknown host encountered while trying to open connection; {}", ex);
             }
         }
+        gettingConnectionTime.add(System.currentTimeMillis() - s);
         return channel;
     }
 
@@ -682,6 +713,7 @@ public class RiakNode implements RiakResponseListener
             // for dead channels during a health check.
             if (channel.isOpen())
             {
+                givenConnection.incrementAndGet();
                 return channel;
             }
         }
@@ -727,6 +759,7 @@ public class RiakNode implements RiakResponseListener
             setupTLSAndAuthenticate(c);
         }
 
+        createdConnection.incrementAndGet();
         return c;
     }
 
@@ -831,6 +864,7 @@ public class RiakNode implements RiakResponseListener
                         logger.debug("Channel id:{} returned to pool", c.hashCode());
                         c.closeFuture().removeListener(inProgressCloseListener);
                         c.closeFuture().addListener(inAvailableCloseListener);
+                        returnedConnection.incrementAndGet();
                         available.offerFirst(new ChannelWithIdleTime(c));
                     }
                     else

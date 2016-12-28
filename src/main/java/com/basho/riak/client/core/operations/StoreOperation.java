@@ -26,6 +26,8 @@ import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAccumulator;
 
 import static com.basho.riak.client.core.operations.Operations.checkPBMessageType;
 import com.basho.riak.client.core.query.Location;
@@ -39,9 +41,38 @@ import org.slf4j.LoggerFactory;
  */
 public class StoreOperation extends FutureOperation<StoreOperation.Response, RiakKvPB.RpbPutResp, Location>
 {
-    private final Logger logger = LoggerFactory.getLogger(StoreOperation.class);
+    private static final Logger logger = LoggerFactory.getLogger(StoreOperation.class);
+    private static final AtomicLong count = new AtomicLong(0);
+    private static final AtomicLong successCount = new AtomicLong(0);
+    private static final AtomicLong failedCount = new AtomicLong(0);
+    private static final LongAccumulator totalTime = new LongAccumulator((a, b) -> a + b, 0);
+    private static final LongAccumulator min = new LongAccumulator((a, b) -> { if(b<a) return b; else return a; }, Long.MAX_VALUE);
+    private static final LongAccumulator max = new LongAccumulator((a, b) -> { if(b>a) return b; else return a; }, 0);
+
+    private long started;
     private final RiakKvPB.RpbPutReq.Builder reqBuilder;
     private final Location location;
+
+    private static final Logger timings = LoggerFactory.getLogger("timings");
+    static {
+        timings.info("Riak Store Operation statistic: starting");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                timings.info("Riak Store Operation statistic: started");
+                while (true) {
+                    timings.info("Riak Store Operation statistic: count = {}, successCount = {}, failedCount = {} averageSuccess = {}, min = {}, max = {}",
+                        count.get(), successCount.get(), failedCount.get(), successCount.get() != 0 ? totalTime.get()/successCount.get() : 0, min.get(), max.get());
+                    try {
+                        Thread.sleep(3000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                        throw new RuntimeException(e);
+                    }
+                }
+            }
+        }, "Riak Store Operation statistics").start();
+    }
 
     private StoreOperation(Builder builder)
     {
@@ -79,6 +110,21 @@ public class StoreOperation extends FutureOperation<StoreOperation.Response, Ria
     }
 
     @Override
+    public synchronized void setComplete() {
+        super.setComplete();
+        if(isSuccess()) {
+            successCount.incrementAndGet();
+        } else {
+            failedCount.incrementAndGet();
+        }
+        final long t = System.currentTimeMillis() - started;
+        totalTime.accumulate(t);
+        min.accumulate(t);
+        max.accumulate(t);
+    }
+
+
+    @Override
     protected RiakKvPB.RpbPutResp decode(RiakMessage rawMessage)
     {
         checkPBMessageType(rawMessage, RiakMessageCodes.MSG_PutResp);
@@ -96,6 +142,8 @@ public class StoreOperation extends FutureOperation<StoreOperation.Response, Ria
     @Override
     protected RiakMessage createChannelMessage()
     {
+        count.incrementAndGet();
+        started = System.currentTimeMillis();
         RiakKvPB.RpbPutReq req = reqBuilder.build();
         return new RiakMessage(RiakMessageCodes.MSG_PutReq, req.toByteArray());
     }

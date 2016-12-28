@@ -27,6 +27,9 @@ import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAccumulator;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,10 +41,39 @@ import org.slf4j.LoggerFactory;
  */
 public class FetchOperation extends FutureOperation<FetchOperation.Response, RiakKvPB.RpbGetResp, Location>
 {
+    private static final Logger logger = LoggerFactory.getLogger(FetchOperation.class);
+    private static final AtomicLong count = new AtomicLong(0);
+    private static final AtomicLong failedCount = new AtomicLong(0);
+    private static final AtomicLong successCount = new AtomicLong(0);
+    private static final LongAccumulator totalTime = new LongAccumulator((a, b) -> a + b, 0);
+    private static final LongAccumulator min = new LongAccumulator((a, b) -> { if(b<a) return b; else return a; }, 0);
+    private static final LongAccumulator max = new LongAccumulator((a, b) -> { if(b>a) return b; else return a; }, 0);
+
+    private long started;
     private final RiakKvPB.RpbGetReq.Builder reqBuilder;
     Location location;
 
-    private final Logger logger = LoggerFactory.getLogger(FetchOperation.class);
+    private static final Logger timings = LoggerFactory.getLogger("timings");
+    static {
+        timings.info("Riak Fetch Operation statistic: starting");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                timings.info("Riak Fetch Operation statistic: started");
+                while (true) {
+                    timings.info("Riak Fetch Operation statistic: count = {}, successCount = {}, failedCount = {} averageSuccess = {}, min = {}, max = {}",
+                        count.get(), successCount.get(), failedCount.get(), successCount.get() != 0 ? totalTime.get()/successCount.get() : 0, min.get(), max.get());
+                    try {
+                        Thread.sleep(3000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                        throw new RuntimeException(e);
+                    }
+                }
+            }
+        }, "Riak Fetch Operation statistics").start();
+    }
+
 
     private FetchOperation(Builder builder)
     {
@@ -81,8 +113,21 @@ public class FetchOperation extends FutureOperation<FetchOperation.Response, Ria
             logger.error("Received {} responses when only one was expected.", responses.size());
         }
 
-        final RiakKvPB.RpbGetResp response = responses.get(0);
-        return convert(response);
+        return convert(responses.get(0));
+    }
+
+    @Override
+    public synchronized void setComplete() {
+        super.setComplete();
+        if(isSuccess()) {
+            successCount.incrementAndGet();
+        } else {
+            failedCount.incrementAndGet();
+        }
+        final long t = System.currentTimeMillis() - started;
+        totalTime.accumulate(t);
+        min.accumulate(t);
+        max.accumulate(t);
     }
 
     static FetchOperation.Response convert(RiakKvPB.RpbGetResp response)
@@ -124,6 +169,8 @@ public class FetchOperation extends FutureOperation<FetchOperation.Response, Ria
     @Override
     protected RiakMessage createChannelMessage()
     {
+        count.incrementAndGet();
+        started = System.currentTimeMillis();
         RiakKvPB.RpbGetReq req = reqBuilder.build();
         return new RiakMessage(RiakMessageCodes.MSG_GetReq, req.toByteArray());
     }

@@ -15,14 +15,10 @@
  */
 package com.basho.riak.client.core;
 
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAccumulator;
 import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,6 +74,8 @@ import org.slf4j.LoggerFactory;
  *                            +------------+
  *
  */
+
+
 
 public abstract class FutureOperation<T, U, S> implements RiakFuture<T,S>
 {
@@ -220,7 +218,7 @@ public abstract class FutureOperation<T, U, S> implements RiakFuture<T,S>
         this.rawResponses.add(decodedMessage);
     }
 
-    public synchronized final void setComplete()
+    public synchronized void setComplete()
     {
         logger.debug("Setting Complete on future");
         stateCheck(State.CLEANUP_WAIT);
