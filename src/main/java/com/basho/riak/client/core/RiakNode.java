@@ -216,8 +216,8 @@ public class RiakNode implements RiakResponseListener
                 while (true) {
                     final long r = requestedConnection.getAndSet(0);
                     final long totalTime = gettingConnectionTime.sumThenReset();
-                    logger.info("Pool statistic: requested = {}, given = {}, createdOnTheFly = {}, returned = {}, total time to get = {}ms , avg time to get = {}ms ", r, givenConnection.getAndSet(0),
-                        createdConnection.getAndSet(0), returnedConnection.getAndSet(0), totalTime, r == 0 ? 0 : totalTime / r );
+                    logger.trace("Pool statistic: requested = {}, given = {}, createdOnTheFly = {}, returned = {}, available = {}, total time to get = {}ms , avg time to get = {}ms ",
+                        r, givenConnection.getAndSet(0), createdConnection.getAndSet(0), returnedConnection.getAndSet(0), available.size(), totalTime, r == 0 ? 0 : totalTime / r );
                     try {
                         Thread.sleep(10000);
                     } catch (InterruptedException e) {

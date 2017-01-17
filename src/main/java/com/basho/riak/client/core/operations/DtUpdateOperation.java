@@ -27,11 +27,46 @@ import com.basho.riak.protobuf.RiakMessageCodes;
 import com.basho.riak.protobuf.RiakDtPB;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAccumulator;
 
 public class DtUpdateOperation extends FutureOperation<DtUpdateOperation.Response, RiakDtPB.DtUpdateResp, Location>
 {
+    private static final AtomicLong count = new AtomicLong(0);
+    private static final AtomicLong successCount = new AtomicLong(0);
+    private static final AtomicLong failedCount = new AtomicLong(0);
+    private static final LongAccumulator totalTime = new LongAccumulator((a, b) -> a + b, 0);
+    private static final LongAccumulator min = new LongAccumulator((a, b) -> { if(b<a) return b; else return a; }, Long.MAX_VALUE);
+    private static final LongAccumulator max = new LongAccumulator((a, b) -> { if(b>a) return b; else return a; }, 0);
+
+    private static final Logger timings = LoggerFactory.getLogger("timings");
+    static {
+        timings.trace("Riak DtUpdateOperation Operation statistic: starting");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                timings.trace("Riak DtUpdateOperation Operation statistic: started");
+                while (true) {
+                    long sc = successCount.getAndSet(0);
+                    timings.trace("Riak DtUpdate Operation statistic: count = {}, successCount = {}, failedCount = {} averageSuccess = {}, min = {}, max = {}",
+                        count.getAndSet(0), successCount.getAndSet(0), failedCount.getAndSet(0),
+                        sc != 0 ? totalTime.getThenReset()/sc : 0, min.getThenReset(), max.getThenReset());
+                    try {
+                        Thread.sleep(60000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                        throw new RuntimeException(e);
+                    }
+                }
+            }
+        }, "Riak DtUpdateOperation Operation statistics").start();
+    }
+
+    private long started;
     private final Location location;
     private final RiakDtPB.DtUpdateReq.Builder reqBuilder;
 
@@ -39,6 +74,20 @@ public class DtUpdateOperation extends FutureOperation<DtUpdateOperation.Respons
     {
         this.reqBuilder = builder.reqBuilder;
         this.location = builder.location;
+    }
+
+    @Override
+    public synchronized void setComplete() {
+        super.setComplete();
+        if(isSuccess()) {
+            successCount.incrementAndGet();
+        } else {
+            failedCount.incrementAndGet();
+        }
+        final long t = System.currentTimeMillis() - started;
+        totalTime.accumulate(t);
+        min.accumulate(t);
+        max.accumulate(t);
     }
 
     @Override
@@ -74,6 +123,8 @@ public class DtUpdateOperation extends FutureOperation<DtUpdateOperation.Respons
     @Override
     protected RiakMessage createChannelMessage()
     {
+        count.incrementAndGet();
+        started = System.currentTimeMillis();
         return new RiakMessage(RiakMessageCodes.MSG_DtUpdateReq, reqBuilder.build().toByteArray());
     }
 

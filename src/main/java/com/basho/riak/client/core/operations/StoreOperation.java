@@ -55,16 +55,18 @@ public class StoreOperation extends FutureOperation<StoreOperation.Response, Ria
 
     private static final Logger timings = LoggerFactory.getLogger("timings");
     static {
-        timings.info("Riak Store Operation statistic: starting");
+        timings.trace("Riak Store Operation statistic: starting");
         new Thread(new Runnable() {
             @Override
             public void run() {
-                timings.info("Riak Store Operation statistic: started");
+                timings.trace("Riak Store Operation statistic: started");
                 while (true) {
-                    timings.info("Riak Store Operation statistic: count = {}, successCount = {}, failedCount = {} averageSuccess = {}, min = {}, max = {}",
-                        count.get(), successCount.get(), failedCount.get(), successCount.get() != 0 ? totalTime.get()/successCount.get() : 0, min.get(), max.get());
+                    long sc = successCount.getAndSet(0);
+                    timings.trace("Riak Store Operation statistic: count = {}, successCount = {}, failedCount = {} averageSuccess = {}, min = {}, max = {}",
+                        count.getAndSet(0), successCount.getAndSet(0), failedCount.getAndSet(0),
+                        sc != 0 ? totalTime.getThenReset()/sc : 0, min.getThenReset(), max.getThenReset());
                     try {
-                        Thread.sleep(3000);
+                        Thread.sleep(60000);
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                         throw new RuntimeException(e);
